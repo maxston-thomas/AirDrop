@@ -1,0 +1,29 @@
+# Python Virtual Environment
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# AirLink File Transfers & User Data
+transfers/
+transfers.db
+transfers.db-journal
+*.tmp
+
+# Environment & Secrets
+.env
+.env.local
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE & OS Files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+.DS_Store
