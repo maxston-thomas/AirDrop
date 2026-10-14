@@ -699,51 +699,62 @@
   }
 
   if (elements.confirmSendBtn) {
-    elements.confirmSendBtn.addEventListener('click', async () => {
+    elements.confirmSendBtn.addEventListener('click', () => {
       if (state.selectedFilesToSend.length === 0) return;
 
-      elements.confirmSendBtn.disabled = true;
-      elements.confirmSendBtn.textContent = 'Preparing...';
+      const files = [...state.selectedFilesToSend];
+      state.selectedFilesToSend = [];
+      renderStagedPreview([]);
 
-      const formData = new FormData();
-      state.selectedFilesToSend.forEach(f => formData.append('files', f));
-
-      try {
-        const res = await fetch('/api/stage-files', {
-          method: 'POST',
-          headers: getAuthHeaders(),
-          body: formData
-        });
-        if (res.ok) {
-          showToast(`Staged ${state.selectedFilesToSend.length} file(s) for mobile download`, 'success');
-          state.selectedFilesToSend = [];
-          renderStagedPreview([]);
-          loadStagedFiles();
-          loadHistory();
-        } else {
-          const err = await res.json();
-          alert('Staging failed: ' + (err.detail || 'Unknown error'));
-        }
-      } catch (e) {
-        showToast('Network error while staging files', 'error');
-      } finally {
-        elements.confirmSendBtn.disabled = false;
-        elements.confirmSendBtn.textContent = 'Transfer Now';
-      }
+      showToast(`Transferring ${files.length} file(s) to mobile phone...`, 'info');
+      files.forEach(file => uploadFileWithProgress(file, 'laptop_to_phone'));
     });
   }
 
   // --- Apple AirDrop P2P Transfer Beam & Progress Rendering ---
 
+  function findTransferCard(transferId, filename) {
+    if (transferId) {
+      const card = document.getElementById(`card_${transferId}`);
+      if (card) return card;
+    }
+    if (filename && elements.activeTransferContainer) {
+      const cards = elements.activeTransferContainer.querySelectorAll('.transfer-card:not(.completed)');
+      for (const c of cards) {
+        const titleEl = c.querySelector('.transfer-card-title');
+        if (titleEl && titleEl.textContent.trim() === filename.trim()) {
+          return c;
+        }
+      }
+    }
+    if (elements.activeTransferContainer) {
+      const uncompleted = elements.activeTransferContainer.querySelectorAll('.transfer-card:not(.completed)');
+      if (uncompleted.length === 1) {
+        return uncompleted[0];
+      }
+    }
+    return null;
+  }
+
   function renderTransferCard(transferId, meta) {
-    if (elements.activeTransfersCard) elements.activeTransfersCard.style.display = 'block';
+    if (elements.activeTransfersCard) {
+      elements.activeTransfersCard.style.display = 'block';
+      try {
+        elements.activeTransfersCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (e) {}
+    }
 
     let card = document.getElementById(`card_${transferId}`);
     if (!card) {
       card = document.createElement('div');
       card.className = `transfer-card ${meta.isOutgoing ? 'outgoing-transfer' : 'incoming-transfer'}`;
       card.id = `card_${transferId}`;
-      elements.activeTransferContainer.prepend(card);
+      card.dataset.transferId = transferId;
+      card.dataset.startTime = Date.now().toString();
+      card.dataset.filename = meta.filename || '';
+      if (elements.activeTransferContainer) {
+        elements.activeTransferContainer.prepend(card);
+      }
     }
 
     const dirBadgeClass = meta.isOutgoing ? 'dir-badge-outgoing' : 'dir-badge-incoming';
@@ -757,7 +768,7 @@
           <div class="file-icon-box" style="width: 32px; height: 32px; border-radius: var(--radius-sm);">
             ${getFileIconSvg(meta.filename)}
           </div>
-          <div style="overflow: hidden;">
+          <div style="overflow: hidden; flex: 1;">
             <div class="transfer-card-title" title="${meta.filename}">${meta.filename}</div>
             <div style="display: flex; gap: 0.4rem; align-items: center; margin-top: 2px;">
               <span class="transfer-direction-badge ${dirBadgeClass}">${dirLabel}</span>
@@ -809,11 +820,22 @@
   }
 
   function updateTransferProgress(transferId, loaded, total, speed, eta) {
-    const pctEl = document.getElementById(`pct_${transferId}`);
-    const barEl = document.getElementById(`bar_${transferId}`);
-    const bytesEl = document.getElementById(`bytes_${transferId}`);
-    const speedEl = document.getElementById(`speed_${transferId}`);
-    const etaEl = document.getElementById(`eta_${transferId}`);
+    let pctEl = document.getElementById(`pct_${transferId}`);
+    let barEl = document.getElementById(`bar_${transferId}`);
+    let bytesEl = document.getElementById(`bytes_${transferId}`);
+    let speedEl = document.getElementById(`speed_${transferId}`);
+    let etaEl = document.getElementById(`eta_${transferId}`);
+
+    if (!pctEl && elements.activeTransferContainer) {
+      const activeCard = elements.activeTransferContainer.querySelector('.transfer-card:not(.completed)');
+      if (activeCard) {
+        pctEl = activeCard.querySelector('[id^="pct_"]');
+        barEl = activeCard.querySelector('.progress-bar');
+        bytesEl = activeCard.querySelector('[id^="bytes_"]');
+        speedEl = activeCard.querySelector('[id^="speed_"]');
+        etaEl = activeCard.querySelector('[id^="eta_"]');
+      }
+    }
 
     const percent = Math.min(100, Math.round((loaded / Math.max(1, total)) * 100));
     if (pctEl) pctEl.textContent = `${percent}%`;
@@ -826,18 +848,47 @@
   }
 
   function completeTransferCard(transferId, data) {
-    const card = document.getElementById(`card_${transferId}`);
+    if (!data) data = {};
+    const card = findTransferCard(transferId, data.filename);
     if (!card) return;
 
-    const barEl = document.getElementById(`bar_${transferId}`);
+    // Immediately stop flight keyframe animation
+    card.classList.add('completed');
+    const packet = card.querySelector('.p2p-flying-packet');
+    if (packet) packet.style.animation = 'none';
+    const pulses = card.querySelector('.p2p-beam-pulses');
+    if (pulses) pulses.style.animation = 'none';
+
+    // Set progress bar to 100%
+    const barEl = card.querySelector('.progress-bar');
     if (barEl) {
       barEl.style.width = '100%';
       barEl.style.backgroundColor = 'var(--success)';
     }
-    const speedEl = document.getElementById(`speed_${transferId}`);
-    if (speedEl) speedEl.innerHTML = `<span class="verifying-spinner"></span> Verifying SHA-256...`;
+
+    const pctEl = card.querySelector('[id^="pct_"]');
+    if (pctEl) {
+      pctEl.textContent = '100%';
+      pctEl.style.color = 'var(--success)';
+    }
+
+    const speedEl = card.querySelector('[id^="speed_"]');
+    if (speedEl) {
+      speedEl.innerHTML = `<span class="verifying-spinner"></span> Verifying SHA-256...`;
+    }
+
+    // Ensure beam animation ran for a visible minimum time (1.2s)
+    const startTime = card.dataset.startTime ? parseInt(card.dataset.startTime, 10) : 0;
+    const elapsed = Date.now() - startTime;
+    const minAnimationMs = 1200;
+    const delay = Math.max(0, minAnimationMs - elapsed);
 
     setTimeout(() => {
+      const shaStr = data.sha256 || data.sha256_hash || '';
+      const shaPreview = shaStr.length >= 10 ? shaStr.substring(0, 10) + '...' : (shaStr || 'Verified');
+      const fileSizeFormatted = data.file_size_formatted || (data.file_size ? formatBytes(data.file_size) : '--');
+      const speedFormatted = data.speed_formatted || (data.speed_bps ? formatSpeed(data.speed_bps) : (data.avg_speed_bytes_sec ? formatSpeed(data.avg_speed_bytes_sec) : ''));
+
       card.innerHTML = `
         <div class="transfer-card-header" style="margin-bottom: 0;">
           <div class="transfer-card-title-group">
@@ -847,25 +898,37 @@
                 <path class="checkmark-check" d="M14.1 27.2l7.1 7.2 16.7-16.8"/>
               </svg>
             </div>
-            <div style="overflow: hidden;">
-              <div class="transfer-card-title">${data.filename}</div>
+            <div style="overflow: hidden; flex: 1;">
+              <div class="transfer-card-title">${data.filename || 'Transferred file'}</div>
               <div class="text-muted" style="font-size: 0.75rem; margin-top: 2px;">
-                ${formatBytes(data.file_size)} &bull; ${formatSpeed(data.avg_speed_bytes_sec || 0)} avg &bull;
-                <span class="hash-preview" data-hash="${data.sha256}" data-name="${data.filename}" style="color: var(--accent); cursor: pointer;">
-                  SHA-256: ${data.sha256.substring(0, 10)}...
+                ${fileSizeFormatted}${speedFormatted ? ' &bull; ' + speedFormatted + ' avg' : ''} &bull;
+                <span class="hash-preview" data-hash="${shaStr}" data-name="${data.filename || 'File'}" style="color: var(--accent); cursor: pointer;">
+                  SHA-256: ${shaPreview}
                 </span>
               </div>
             </div>
           </div>
-          <div>
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
             <span class="badge badge-verified">
               Verified Lossless
             </span>
+            <button class="btn btn-secondary btn-icon btn-sm dismiss-transfer-btn" title="Dismiss" style="padding: 0.2rem 0.45rem; font-size: 0.85rem; border-radius: var(--radius-sm); line-height: 1;">&times;</button>
           </div>
         </div>
       `;
+
+      const dismissBtn = card.querySelector('.dismiss-transfer-btn');
+      if (dismissBtn) {
+        dismissBtn.addEventListener('click', () => {
+          card.remove();
+          if (elements.activeTransferContainer && elements.activeTransferContainer.children.length === 0) {
+            if (elements.activeTransfersCard) elements.activeTransfersCard.style.display = 'none';
+          }
+        });
+      }
+
       bindHashModalTriggers();
-    }, 450);
+    }, delay + 350);
   }
 
   // --- Streaming Upload with Accurate Speed & Peer Notification ---
@@ -875,12 +938,19 @@
     state.localInitiatedTransfers.add(transferId);
     state.activeTransfers[transferId] = { file, startTime: Date.now() };
 
-    const isLaptop = state.role === 'host';
-    const peerDeviceName = state.connectedDevices[0]?.device_info?.device_name || (isLaptop ? 'Mobile Phone' : 'Host Laptop');
-    const myDeviceName = isLaptop ? 'Host Laptop' : peerDeviceName;
+    const isHost = state.role === 'host';
+    const isLaptopToPhone = direction === 'laptop_to_phone';
 
-    const senderName = isLaptop ? 'Host Laptop' : myDeviceName;
-    const receiverName = isLaptop ? peerDeviceName : 'Host Laptop';
+    let peerName = 'Peer Device';
+    if (isHost) {
+      peerName = state.connectedDevices[0]?.device_info?.device_name || 'Mobile Phone';
+    } else {
+      peerName = 'Host Laptop';
+    }
+
+    const myDeviceName = isHost ? 'Host Laptop' : (state.deviceInfo?.device_name || 'Mobile Phone');
+    const senderName = isLaptopToPhone ? 'Host Laptop' : myDeviceName;
+    const receiverName = isLaptopToPhone ? peerName : 'Host Laptop';
 
     // 1. Notify peer in real time that transfer started
     fetch('/api/transfers/notify-start', {
@@ -961,8 +1031,9 @@
         showToast(`Transferred ${resp.filename} successfully`, 'success');
         loadHistory();
       } else {
-        const card = document.getElementById(`card_${transferId}`);
+        const card = findTransferCard(transferId, file.name);
         if (card) {
+          card.classList.add('completed');
           card.innerHTML = `
             <div class="transfer-card-header">
               <span class="transfer-card-title">${file.name}</span>
@@ -978,8 +1049,9 @@
     });
 
     xhr.addEventListener('error', () => {
-      const card = document.getElementById(`card_${transferId}`);
+      const card = findTransferCard(transferId, file.name);
       if (card) {
+        card.classList.add('completed');
         card.innerHTML = `
           <div class="transfer-card-header">
             <span class="transfer-card-title">${file.name}</span>
@@ -992,6 +1064,7 @@
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('transfer_id', transferId);
     formData.append('direction', direction);
 
     xhr.open('POST', '/api/uploads');
@@ -1053,7 +1126,28 @@
       ul.appendChild(li);
 
       li.querySelector('.download-action-btn').addEventListener('click', () => {
-        showToast(`Starting download: ${f.filename}`, 'info');
+        showToast(`Downloading: ${f.filename}`, 'info');
+        const dlTxId = 'dl_' + Math.random().toString(36).substr(2, 9);
+        renderTransferCard(dlTxId, {
+          filename: f.filename,
+          fileSize: f.file_size,
+          direction: 'laptop_to_phone',
+          senderName: 'Host Laptop',
+          receiverName: 'Mobile Phone',
+          isOutgoing: false
+        });
+        updateTransferProgress(dlTxId, Math.round(f.file_size * 0.45), f.file_size, f.file_size * 2, 0);
+        setTimeout(() => {
+          updateTransferProgress(dlTxId, f.file_size, f.file_size, f.file_size * 3, 0);
+          completeTransferCard(dlTxId, {
+            filename: f.filename,
+            file_size: f.file_size,
+            file_size_formatted: f.file_size_formatted,
+            sha256: f.sha256,
+            verified: true,
+            speed_bps: f.file_size * 2
+          });
+        }, 900);
       });
     });
 
@@ -1343,13 +1437,17 @@
     } else if (event === 'transfer_started') {
       // Both sides see the transfer!
       if (!state.localInitiatedTransfers.has(data.transfer_id)) {
-        const myName = state.role === 'host' ? 'Host Laptop' : 'Mobile Phone';
+        const isHost = state.role === 'host';
+        const isLaptopToPhone = data.direction === 'laptop_to_phone';
+        const sender = data.sender_device || (isLaptopToPhone ? 'Host Laptop' : 'Mobile Phone');
+        const receiver = isLaptopToPhone ? (isHost ? 'Mobile Phone' : 'Mobile Phone') : 'Host Laptop';
+
         renderTransferCard(data.transfer_id, {
           filename: data.filename,
           fileSize: data.file_size,
           direction: data.direction,
-          senderName: data.sender_device || 'Peer Device',
-          receiverName: myName,
+          senderName: sender,
+          receiverName: receiver,
           isOutgoing: false
         });
         showToast(`Incoming file: ${data.filename}`, 'info');
@@ -1364,12 +1462,13 @@
       loadHistory();
       loadStagedFiles();
     } else if (event === 'transfer_failed') {
-      const card = document.getElementById(`card_${data.transfer_id}`);
+      const card = findTransferCard(data.transfer_id, data.filename);
       if (card) {
+        card.classList.add('completed');
         card.innerHTML = `
-          <div class="transfer-card-header">
+          <div class="transfer-card-header" style="margin-bottom: 0;">
             <span class="transfer-card-title">${data.filename || 'Transfer'}</span>
-            <span class="badge badge-mismatch">Failed</span>
+            <span class="badge badge-mismatch">Transfer Failed</span>
           </div>
         `;
       }

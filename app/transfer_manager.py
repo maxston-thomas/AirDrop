@@ -133,7 +133,8 @@ class TransferManager:
         self,
         upload_file: UploadFile,
         sender_sha256: Optional[str] = None,
-        direction: str = "phone_to_laptop"
+        direction: str = "phone_to_laptop",
+        transfer_id: Optional[str] = None
     ) -> dict:
         """
         Streams an incoming file to a temporary file while computing SHA-256 on-the-fly.
@@ -185,9 +186,9 @@ class TransferManager:
         final_dest = self._get_unique_destination_path(clean_name)
         temp_path.rename(final_dest)
 
-        transfer_id = secrets.token_hex(12)
+        tid = transfer_id or secrets.token_hex(12)
         history_manager.add_transfer(
-            transfer_id=transfer_id,
+            transfer_id=tid,
             filename=final_dest.name,
             file_size=bytes_written,
             direction=direction,
@@ -201,7 +202,7 @@ class TransferManager:
         )
 
         return {
-            "transfer_id": transfer_id,
+            "transfer_id": tid,
             "filename": final_dest.name,
             "file_size": bytes_written,
             "file_size_formatted": format_bytes(bytes_written),

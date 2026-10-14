@@ -429,6 +429,7 @@ async def unstage_file(file_id: str, session: dict = Depends(require_host)):
 @app.post("/api/uploads")
 async def upload_file(
     file: UploadFile = File(...),
+    transfer_id: Optional[str] = Form(None),
     sender_sha256: Optional[str] = Form(None),
     direction: Optional[str] = Form("phone_to_laptop"),
     session: dict = Depends(require_auth)
@@ -441,8 +442,20 @@ async def upload_file(
     result = await transfer_manager.save_uploaded_stream(
         upload_file=file,
         sender_sha256=sender_sha256,
-        direction=direction or "phone_to_laptop"
+        direction=direction or "phone_to_laptop",
+        transfer_id=transfer_id
     )
+
+    if direction == "laptop_to_phone":
+        saved_path = TRANSFERS_DIR / result["filename"]
+        transfer_manager.stage_file(
+            filename=result["filename"],
+            file_path=saved_path
+        )
+        await ws_manager.broadcast({
+            "event": "files_staged_updated",
+            "data": {"staged_files": transfer_manager.list_staged_files()}
+        })
 
     # Notify all devices of completed upload and updated history
     await ws_manager.broadcast({
@@ -542,10 +555,13 @@ async def websocket_endpoint(websocket: WebSocket):
     # If an authenticated mobile client connects, update status and broadcast to host
     if role == "client" and token:
         session_manager.set_client_connected(token, True)
+        devs = session_manager.get_connected_devices()
+        active_dev = devs[0] if devs else None
         await ws_manager.broadcast({
             "event": "device_connected",
             "data": {
-                "devices": session_manager.get_connected_devices()
+                "device": active_dev,
+                "devices": devs
             }
         })
 
@@ -561,19 +577,23 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
         if role == "client" and token:
             session_manager.set_client_connected(token, False)
+            devs = session_manager.get_connected_devices()
             await ws_manager.broadcast({
                 "event": "device_disconnected",
                 "data": {
-                    "devices": session_manager.get_connected_devices()
+                    "device": None,
+                    "devices": devs
                 }
             })
     except Exception:
         ws_manager.disconnect(websocket)
         if role == "client" and token:
             session_manager.set_client_connected(token, False)
+            devs = session_manager.get_connected_devices()
             await ws_manager.broadcast({
                 "event": "device_disconnected",
                 "data": {
-                    "devices": session_manager.get_connected_devices()
+                    "device": None,
+                    "devices": devs
                 }
             })
