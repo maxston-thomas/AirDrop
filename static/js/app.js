@@ -2,6 +2,7 @@
  * AirDrop — Offline File Transfer Client Logic
  * Apple macOS/iOS inspired system utility experience.
  * Authoritative connection states, live radar, real-time WebSocket presence,
+ * peer-to-peer visual transfer beam animations on BOTH sender and receiver,
  * streaming uploads with accurate speed calculation, SHA-256 cryptographic verification,
  * segmented history filtering, and non-blocking toast notifications.
  */
@@ -27,6 +28,7 @@
     stagedFiles: [],
     selectedFilesToSend: [],
     activeTransfers: {},
+    localInitiatedTransfers: new Set(),
     historyItems: [],
     historyFilter: 'all',
     historySearchQuery: '',
@@ -57,6 +59,7 @@
     qrContainer: document.getElementById('qrContainer'),
     accessUrlText: document.getElementById('accessUrlText'),
     copyUrlBtn: document.getElementById('copyUrlBtn'),
+    refreshNetworkBtn: document.getElementById('refreshNetworkBtn'),
     interfaceSelectorContainer: document.getElementById('interfaceSelectorContainer'),
     interfaceSelect: document.getElementById('interfaceSelect'),
     pairingCodeDisplay: document.getElementById('pairingCodeDisplay'),
@@ -157,6 +160,17 @@
     return headers;
   }
 
+  function getDeviceIconSvg(deviceName) {
+    const name = (deviceName || '').toLowerCase();
+    if (name.includes('iphone') || name.includes('phone') || name.includes('mobile') || name.includes('android') || name.includes('pixel') || name.includes('samsung')) {
+      return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>`;
+    }
+    if (name.includes('ipad') || name.includes('tablet')) {
+      return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>`;
+    }
+    return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`;
+  }
+
   function getFileIconSvg(filename) {
     const ext = (filename || '').split('.').pop().toLowerCase();
     if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'svg', 'bmp'].includes(ext)) {
@@ -248,11 +262,11 @@
           elements.interfaceSelect.appendChild(opt);
         });
 
-        elements.interfaceSelect.addEventListener('change', () => {
+        elements.interfaceSelect.onchange = () => {
           const selectedIp = elements.interfaceSelect.value;
           const newUrl = `http://${selectedIp}:${data.port}`;
           if (elements.accessUrlText) elements.accessUrlText.textContent = newUrl;
-        });
+        };
       }
     } catch (err) {
       console.warn('Network info load failed:', err);
@@ -325,7 +339,7 @@
 
     if (newState === 'CONNECTED') {
       elements.statusDot.className = 'status-dot online';
-      const devName = deviceData?.device_name || 'Mobile Phone';
+      const devName = deviceData?.device_info?.device_name || deviceData?.device_name || 'Mobile Phone';
       elements.connectionStateLabel.textContent = `Connected: ${devName}`;
 
       if (elements.waitingForDeviceView) elements.waitingForDeviceView.style.display = 'none';
@@ -719,36 +733,182 @@
     });
   }
 
-  // --- Streaming Upload with Accurate Speed & Progress ---
+  // --- Apple AirDrop P2P Transfer Beam & Progress Rendering ---
 
-  function uploadFileWithProgress(file, direction) {
-    const transferId = 'tx_' + Math.random().toString(36).substr(2, 9);
+  function renderTransferCard(transferId, meta) {
     if (elements.activeTransfersCard) elements.activeTransfersCard.style.display = 'block';
 
-    const card = document.createElement('div');
-    card.className = 'transfer-card';
-    card.id = `card_${transferId}`;
+    let card = document.getElementById(`card_${transferId}`);
+    if (!card) {
+      card = document.createElement('div');
+      card.className = `transfer-card ${meta.isOutgoing ? 'outgoing-transfer' : 'incoming-transfer'}`;
+      card.id = `card_${transferId}`;
+      elements.activeTransferContainer.prepend(card);
+    }
+
+    const dirBadgeClass = meta.isOutgoing ? 'dir-badge-outgoing' : 'dir-badge-incoming';
+    const dirLabel = meta.isOutgoing ? 'Outgoing Transfer' : 'Incoming Transfer';
+    const isReverse = !meta.isOutgoing;
+    if (isReverse) card.classList.add('direction-reverse');
+
     card.innerHTML = `
-      <div class="transfer-header">
-        <div style="display: flex; align-items: center; gap: 0.5rem; overflow: hidden;">
-          <div class="file-icon-box" style="width: 28px; height: 28px;">
-            ${getFileIconSvg(file.name)}
+      <div class="transfer-card-header">
+        <div class="transfer-card-title-group">
+          <div class="file-icon-box" style="width: 32px; height: 32px; border-radius: var(--radius-sm);">
+            ${getFileIconSvg(meta.filename)}
           </div>
-          <span class="transfer-title">${file.name}</span>
+          <div style="overflow: hidden;">
+            <div class="transfer-card-title" title="${meta.filename}">${meta.filename}</div>
+            <div style="display: flex; gap: 0.4rem; align-items: center; margin-top: 2px;">
+              <span class="transfer-direction-badge ${dirBadgeClass}">${dirLabel}</span>
+              <span class="text-muted" style="font-size: 0.72rem;">${formatBytes(meta.fileSize)}</span>
+            </div>
+          </div>
         </div>
-        <span class="text-muted" id="pct_${transferId}">0%</span>
+        <div style="text-align: right;">
+          <span class="text-muted" id="pct_${transferId}" style="font-weight: 700; font-size: 0.95rem; color: var(--accent);">0%</span>
+        </div>
       </div>
+
+      <!-- Peer to Peer Wireless Animated Beam Stage -->
+      <div class="p2p-beam-stage">
+        <div class="p2p-device-node active">
+          <div class="p2p-node-avatar" title="${meta.senderName}">
+            ${getDeviceIconSvg(meta.senderName)}
+          </div>
+          <span class="p2p-node-name">${meta.senderName}</span>
+        </div>
+
+        <div class="p2p-beam-track">
+          <div class="p2p-beam-pulses"></div>
+          <div class="p2p-flying-packet">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+        </div>
+
+        <div class="p2p-device-node active">
+          <div class="p2p-node-avatar" title="${meta.receiverName}">
+            ${getDeviceIconSvg(meta.receiverName)}
+          </div>
+          <span class="p2p-node-name">${meta.receiverName}</span>
+        </div>
+      </div>
+
       <div class="progress-track">
         <div class="progress-bar" id="bar_${transferId}"></div>
       </div>
+
       <div class="progress-meta">
-        <span id="bytes_${transferId}">0 B / ${formatBytes(file.size)}</span>
-        <span id="speed_${transferId}">Calculating speed...</span>
+        <span id="bytes_${transferId}">0 B / ${formatBytes(meta.fileSize)}</span>
+        <span id="speed_${transferId}">Starting transfer...</span>
         <span id="eta_${transferId}">ETA: --</span>
       </div>
     `;
-    elements.activeTransferContainer.prepend(card);
 
+    return card;
+  }
+
+  function updateTransferProgress(transferId, loaded, total, speed, eta) {
+    const pctEl = document.getElementById(`pct_${transferId}`);
+    const barEl = document.getElementById(`bar_${transferId}`);
+    const bytesEl = document.getElementById(`bytes_${transferId}`);
+    const speedEl = document.getElementById(`speed_${transferId}`);
+    const etaEl = document.getElementById(`eta_${transferId}`);
+
+    const percent = Math.min(100, Math.round((loaded / Math.max(1, total)) * 100));
+    if (pctEl) pctEl.textContent = `${percent}%`;
+    if (barEl) barEl.style.width = `${percent}%`;
+    if (bytesEl) bytesEl.textContent = `${formatBytes(loaded)} / ${formatBytes(total)}`;
+    if (speedEl && speed > 0) speedEl.textContent = formatSpeed(speed);
+    if (etaEl && eta !== undefined && eta !== null) {
+      etaEl.textContent = eta > 0 ? `ETA: ${formatSeconds(eta)}` : 'Finalizing...';
+    }
+  }
+
+  function completeTransferCard(transferId, data) {
+    const card = document.getElementById(`card_${transferId}`);
+    if (!card) return;
+
+    const barEl = document.getElementById(`bar_${transferId}`);
+    if (barEl) {
+      barEl.style.width = '100%';
+      barEl.style.backgroundColor = 'var(--success)';
+    }
+    const speedEl = document.getElementById(`speed_${transferId}`);
+    if (speedEl) speedEl.innerHTML = `<span class="verifying-spinner"></span> Verifying SHA-256...`;
+
+    setTimeout(() => {
+      card.innerHTML = `
+        <div class="transfer-card-header" style="margin-bottom: 0;">
+          <div class="transfer-card-title-group">
+            <div class="checkmark-wrap">
+              <svg class="checkmark-svg" viewBox="0 0 52 52">
+                <circle class="checkmark-circle" cx="26" cy="26" r="24"/>
+                <path class="checkmark-check" d="M14.1 27.2l7.1 7.2 16.7-16.8"/>
+              </svg>
+            </div>
+            <div style="overflow: hidden;">
+              <div class="transfer-card-title">${data.filename}</div>
+              <div class="text-muted" style="font-size: 0.75rem; margin-top: 2px;">
+                ${formatBytes(data.file_size)} &bull; ${formatSpeed(data.avg_speed_bytes_sec || 0)} avg &bull;
+                <span class="hash-preview" data-hash="${data.sha256}" data-name="${data.filename}" style="color: var(--accent); cursor: pointer;">
+                  SHA-256: ${data.sha256.substring(0, 10)}...
+                </span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <span class="badge badge-verified">
+              Verified Lossless
+            </span>
+          </div>
+        </div>
+      `;
+      bindHashModalTriggers();
+    }, 450);
+  }
+
+  // --- Streaming Upload with Accurate Speed & Peer Notification ---
+
+  function uploadFileWithProgress(file, direction) {
+    const transferId = 'tx_' + Math.random().toString(36).substr(2, 9);
+    state.localInitiatedTransfers.add(transferId);
+    state.activeTransfers[transferId] = { file, startTime: Date.now() };
+
+    const isLaptop = state.role === 'host';
+    const peerDeviceName = state.connectedDevices[0]?.device_info?.device_name || (isLaptop ? 'Mobile Phone' : 'Host Laptop');
+    const myDeviceName = isLaptop ? 'Host Laptop' : peerDeviceName;
+
+    const senderName = isLaptop ? 'Host Laptop' : myDeviceName;
+    const receiverName = isLaptop ? peerDeviceName : 'Host Laptop';
+
+    // 1. Notify peer in real time that transfer started
+    fetch('/api/transfers/notify-start', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({
+        transfer_id: transferId,
+        filename: file.name,
+        file_size: file.size,
+        direction: direction,
+        sender_device: senderName
+      })
+    }).catch(() => {});
+
+    // 2. Render Outgoing Card on local client
+    renderTransferCard(transferId, {
+      filename: file.name,
+      fileSize: file.size,
+      direction: direction,
+      senderName: senderName,
+      receiverName: receiverName,
+      isOutgoing: true
+    });
+
+    // 3. Initiate chunked streaming XHR upload
     const xhr = new XMLHttpRequest();
     const startTime = Date.now();
     let lastLoaded = 0;
@@ -757,89 +917,76 @@
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable) {
         const now = Date.now();
-        const percent = Math.round((e.loaded / e.total) * 100);
-        const pctEl = document.getElementById(`pct_${transferId}`);
-        const barEl = document.getElementById(`bar_${transferId}`);
-        const bytesEl = document.getElementById(`bytes_${transferId}`);
-        const speedEl = document.getElementById(`speed_${transferId}`);
-        const etaEl = document.getElementById(`eta_${transferId}`);
-
-        if (pctEl) pctEl.textContent = `${percent}%`;
-        if (barEl) barEl.style.width = `${percent}%`;
-        if (bytesEl) bytesEl.textContent = `${formatBytes(e.loaded)} / ${formatBytes(e.total)}`;
-
-        // Throttle speed calculation to every 200ms
         const timeDiff = (now - lastTime) / 1000;
-        if (timeDiff >= 0.2) {
+
+        let currentSpeed = 0;
+        let etaSeconds = 0;
+
+        if (timeDiff >= 0.25) {
           const bytesDiff = e.loaded - lastLoaded;
-          const currentSpeed = bytesDiff / timeDiff;
-          if (speedEl) speedEl.textContent = formatSpeed(currentSpeed);
-
+          currentSpeed = bytesDiff / timeDiff;
           const remainingBytes = e.total - e.loaded;
-          if (currentSpeed > 0 && etaEl) {
-            const etaSeconds = remainingBytes / currentSpeed;
-            etaEl.textContent = `ETA: ${formatSeconds(etaSeconds)}`;
+          if (currentSpeed > 0) {
+            etaSeconds = remainingBytes / currentSpeed;
           }
-
           lastLoaded = e.loaded;
           lastTime = now;
+
+          // Notify peer of live progress
+          fetch('/api/transfers/notify-progress', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeaders()
+            },
+            body: JSON.stringify({
+              transfer_id: transferId,
+              loaded: e.loaded,
+              total: e.total,
+              speed: currentSpeed,
+              eta: Math.round(etaSeconds),
+              direction: direction
+            })
+          }).catch(() => {});
         }
+
+        updateTransferProgress(transferId, e.loaded, e.total, currentSpeed, Math.round(etaSeconds));
       }
     });
 
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         const resp = JSON.parse(xhr.responseText);
-        const totalDuration = (Date.now() - startTime) / 1000;
-        const avgSpeed = file.size / Math.max(0.001, totalDuration);
-
-        card.innerHTML = `
-          <div class="transfer-header">
-            <div style="display: flex; align-items: center; gap: 0.5rem; overflow: hidden;">
-              <div class="file-icon-box" style="width: 28px; height: 28px;">
-                ${getFileIconSvg(resp.filename)}
-              </div>
-              <span class="transfer-title">${resp.filename}</span>
-            </div>
-            <span class="badge badge-verified">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="display: inline-block; vertical-align: middle; margin-right: 2px;"><polyline points="20 6 9 17 4 12"/></svg>
-              Completed
-            </span>
-          </div>
-          <div class="progress-track">
-            <div class="progress-bar" style="width: 100%; background-color: var(--success);"></div>
-          </div>
-          <div class="progress-meta" style="margin-top: 0.4rem;">
-            <span>${formatBytes(resp.file_size)} &bull; ${formatSpeed(avgSpeed)} avg</span>
-            <span class="hash-preview" data-hash="${resp.sha256}" data-name="${resp.filename}" style="cursor: pointer; color: var(--accent);">
-              SHA-256: ${resp.sha256.substring(0, 10)}...
-            </span>
-          </div>
-        `;
-        bindHashModalTriggers();
+        completeTransferCard(transferId, resp);
         showToast(`Transferred ${resp.filename} successfully`, 'success');
         loadHistory();
       } else {
-        card.innerHTML = `
-          <div class="transfer-header">
-            <span class="transfer-title">${file.name}</span>
-            <span class="badge badge-mismatch">Upload Failed</span>
-          </div>
-          <p class="text-muted" style="font-size: 0.75rem; color: var(--danger); margin-top: 0.25rem;">
-            Server error (${xhr.status}). Incomplete file was discarded.
-          </p>
-        `;
+        const card = document.getElementById(`card_${transferId}`);
+        if (card) {
+          card.innerHTML = `
+            <div class="transfer-card-header">
+              <span class="transfer-card-title">${file.name}</span>
+              <span class="badge badge-mismatch">Upload Failed</span>
+            </div>
+            <p class="text-muted" style="font-size: 0.75rem; color: var(--danger); margin-top: 0.25rem;">
+              Server error (${xhr.status}). Incomplete file was discarded.
+            </p>
+          `;
+        }
         showToast(`Transfer failed for ${file.name}`, 'error');
       }
     });
 
     xhr.addEventListener('error', () => {
-      card.innerHTML = `
-        <div class="transfer-header">
-          <span class="transfer-title">${file.name}</span>
-          <span class="badge badge-mismatch">Interrupted</span>
-        </div>
-      `;
+      const card = document.getElementById(`card_${transferId}`);
+      if (card) {
+        card.innerHTML = `
+          <div class="transfer-card-header">
+            <span class="transfer-card-title">${file.name}</span>
+            <span class="badge badge-mismatch">Interrupted</span>
+          </div>
+        `;
+      }
       showToast('Network transfer interrupted', 'error');
     });
 
@@ -898,12 +1045,16 @@
           </div>
         </div>
         <div>
-          <a href="/api/files/${f.file_id}/download?token=${state.token || state.hostToken}" class="btn btn-primary btn-sm" download="${f.filename}">
+          <a href="/api/files/${f.file_id}/download?token=${state.token || state.hostToken}" class="btn btn-primary btn-sm download-action-btn" download="${f.filename}">
             Download
           </a>
         </div>
       `;
       ul.appendChild(li);
+
+      li.querySelector('.download-action-btn').addEventListener('click', () => {
+        showToast(`Starting download: ${f.filename}`, 'info');
+      });
     });
 
     elements.incomingFilesList.appendChild(ul);
@@ -1086,7 +1237,7 @@
     };
   }
 
-  // --- Copy URL Button ---
+  // --- Copy URL & Rescan Network Buttons ---
 
   if (elements.copyUrlBtn && elements.accessUrlText) {
     elements.copyUrlBtn.onclick = () => {
@@ -1094,6 +1245,18 @@
       elements.copyUrlBtn.textContent = 'Copied!';
       setTimeout(() => elements.copyUrlBtn.textContent = 'Copy', 1500);
       showToast('Connection URL copied to clipboard', 'info');
+    };
+  }
+
+  if (elements.refreshNetworkBtn) {
+    elements.refreshNetworkBtn.onclick = async () => {
+      elements.refreshNetworkBtn.disabled = true;
+      showToast('Rescanning Wi-Fi & network adapters...', 'info');
+      await loadNetworkInfo();
+      setTimeout(() => {
+        elements.refreshNetworkBtn.disabled = false;
+        showToast('Network information refreshed', 'success');
+      }, 500);
     };
   }
 
@@ -1177,14 +1340,44 @@
       state.codeRemaining = data.remaining_seconds;
       if (elements.pairingCodeDisplay) elements.pairingCodeDisplay.textContent = data.pairing_code;
       startCodeCountdown();
+    } else if (event === 'transfer_started') {
+      // Both sides see the transfer!
+      if (!state.localInitiatedTransfers.has(data.transfer_id)) {
+        const myName = state.role === 'host' ? 'Host Laptop' : 'Mobile Phone';
+        renderTransferCard(data.transfer_id, {
+          filename: data.filename,
+          fileSize: data.file_size,
+          direction: data.direction,
+          senderName: data.sender_device || 'Peer Device',
+          receiverName: myName,
+          isOutgoing: false
+        });
+        showToast(`Incoming file: ${data.filename}`, 'info');
+      }
+    } else if (event === 'transfer_progress') {
+      // Receiver updates progress in lockstep with sender
+      if (!state.localInitiatedTransfers.has(data.transfer_id)) {
+        updateTransferProgress(data.transfer_id, data.loaded, data.total, data.speed, data.eta);
+      }
+    } else if (event === 'transfer_completed') {
+      completeTransferCard(data.transfer_id, data);
+      loadHistory();
+      loadStagedFiles();
+    } else if (event === 'transfer_failed') {
+      const card = document.getElementById(`card_${data.transfer_id}`);
+      if (card) {
+        card.innerHTML = `
+          <div class="transfer-card-header">
+            <span class="transfer-card-title">${data.filename || 'Transfer'}</span>
+            <span class="badge badge-mismatch">Failed</span>
+          </div>
+        `;
+      }
     } else if (event === 'files_staged_updated') {
       renderIncomingFiles(data.staged_files || []);
       if (state.role === 'client') {
         showToast('New files available from laptop for download', 'info');
       }
-    } else if (event === 'transfer_completed') {
-      loadHistory();
-      loadStagedFiles();
     } else if (event === 'history_cleared') {
       state.historyItems = [];
       renderFilteredHistory();

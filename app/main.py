@@ -60,6 +60,28 @@ class ClearHistorySchema(BaseModel):
     confirm: bool = True
 
 
+class TransferNotifyStartSchema(BaseModel):
+    transfer_id: str
+    filename: str
+    file_size: int
+    direction: str = "phone_to_laptop"
+    sender_device: Optional[str] = "Device"
+
+
+class TransferNotifyProgressSchema(BaseModel):
+    transfer_id: str
+    loaded: int
+    total: int
+    speed: float = 0.0
+    eta: Optional[int] = None
+    direction: Optional[str] = "phone_to_laptop"
+
+
+class TransferNotifyCancelSchema(BaseModel):
+    transfer_id: str
+    reason: Optional[str] = "Cancelled"
+
+
 # --- HTML Page Routes ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -429,6 +451,36 @@ async def upload_file(
     })
 
     return result
+
+
+@app.post("/api/transfers/notify-start")
+async def notify_transfer_start(payload: TransferNotifyStartSchema, session: dict = Depends(require_auth)):
+    """Broadcasts to all connected devices that a file transfer has initiated."""
+    await ws_manager.broadcast({
+        "event": "transfer_started",
+        "data": payload.model_dump()
+    })
+    return {"success": True}
+
+
+@app.post("/api/transfers/notify-progress")
+async def notify_transfer_progress(payload: TransferNotifyProgressSchema, session: dict = Depends(require_auth)):
+    """Broadcasts real-time upload progress to the receiving device."""
+    await ws_manager.broadcast({
+        "event": "transfer_progress",
+        "data": payload.model_dump()
+    })
+    return {"success": True}
+
+
+@app.post("/api/transfers/notify-cancel")
+async def notify_transfer_cancel(payload: TransferNotifyCancelSchema, session: dict = Depends(require_auth)):
+    """Broadcasts transfer cancellation."""
+    await ws_manager.broadcast({
+        "event": "transfer_failed",
+        "data": payload.model_dump()
+    })
+    return {"success": True}
 
 
 @app.get("/api/transfers")

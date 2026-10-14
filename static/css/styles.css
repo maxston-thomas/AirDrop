@@ -713,20 +713,32 @@ p {
   white-space: nowrap;
 }
 
-/* Active Transfer Cards */
+/* Active Transfer Cards & Apple-Style P2P Beam Animation */
 .transfer-card {
   background-color: var(--bg-card-secondary);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 1rem;
-  margin-bottom: 0.75rem;
-  animation: card-appear 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow-sm);
+  animation: card-appear 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition-normal);
+}
+
+.transfer-card.incoming-transfer {
+  border-left: 3px solid var(--accent);
+}
+
+.transfer-card.outgoing-transfer {
+  border-left: 3px solid var(--success);
 }
 
 @keyframes card-appear {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -738,25 +750,148 @@ p {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.5rem;
-  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  gap: 0.75rem;
+}
+
+.transfer-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  overflow: hidden;
+  flex: 1;
 }
 
 .transfer-card-title {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   font-weight: 600;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Peer-to-Peer Visual Wireless Beam */
+.p2p-beam-stage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.1rem;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  margin: 0.75rem 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.p2p-device-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  z-index: 2;
+  min-width: 65px;
+}
+
+.p2p-node-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background-color: var(--bg-card-subtle);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  position: relative;
+  transition: all var(--transition-normal);
+}
+
+.p2p-device-node.active .p2p-node-avatar {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-subtle);
+  color: var(--accent);
+}
+
+.p2p-node-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 85px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Traveling Wireless Particle Beam */
+.p2p-beam-track {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin: 0 0.85rem;
+  position: relative;
+  overflow: visible;
+  display: flex;
+  align-items: center;
+}
+
+.p2p-beam-pulses {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: flowingBeam 1.6s infinite linear;
+}
+
+@keyframes flowingBeam {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.p2p-flying-packet {
+  position: absolute;
+  top: -12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background-color: var(--accent);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 113, 227, 0.4);
+  animation: glideFlight 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.transfer-card.direction-reverse .p2p-flying-packet {
+  animation: glideFlightReverse 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes glideFlight {
+  0% { left: 5%; opacity: 0; transform: scale(0.7); }
+  20% { opacity: 1; transform: scale(1); }
+  80% { opacity: 1; transform: scale(1); }
+  100% { left: 90%; opacity: 0; transform: scale(0.7); }
+}
+
+@keyframes glideFlightReverse {
+  0% { left: 90%; opacity: 0; transform: scale(0.7); }
+  20% { opacity: 1; transform: scale(1); }
+  80% { opacity: 1; transform: scale(1); }
+  100% { left: 5%; opacity: 0; transform: scale(0.7); }
+}
+
 .progress-track {
   width: 100%;
-  height: 6px;
+  height: 7px;
   background-color: var(--border);
   border-radius: var(--radius-full);
   overflow: hidden;
-  margin: 0.5rem 0;
+  margin: 0.65rem 0 0.45rem 0;
 }
 
 .progress-bar {
@@ -764,15 +899,71 @@ p {
   background-color: var(--accent);
   width: 0%;
   border-radius: var(--radius-full);
-  transition: width 0.2s ease;
+  transition: width 0.15s ease-out;
+  box-shadow: 0 0 6px var(--accent-subtle);
 }
 
 .progress-meta {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   color: var(--text-muted);
+}
+
+/* Completion Animated Checkmark SVG */
+.checkmark-wrap {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.checkmark-svg {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: block;
+  stroke-width: 2.5;
+  stroke: var(--success);
+  stroke-miterlimit: 10;
+  fill: none;
+}
+
+.checkmark-circle {
+  stroke-dasharray: 166;
+  stroke-dashoffset: 166;
+  stroke-width: 2.5;
+  stroke: var(--success);
+  fill: none;
+  animation: strokeCircle 0.5s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+}
+
+.checkmark-check {
+  transform-origin: 50% 50%;
+  stroke-dasharray: 48;
+  stroke-dashoffset: 48;
+  stroke: var(--success);
+  animation: strokeCheck 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.4s forwards;
+}
+
+@keyframes strokeCircle {
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes strokeCheck {
+  100% { stroke-dashoffset: 0; }
+}
+
+.verifying-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--accent-subtle);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s infinite linear;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 4px;
 }
 
 /* Segmented Control */
